@@ -1,0 +1,4 @@
+[{<<"granderl">>,
+  {git,"https://github.com/tokenrove/granderl.git",
+       {ref,"661cdeb5f99f47b4adfd84c18a31162c72d757f6"}},
+  0}].
