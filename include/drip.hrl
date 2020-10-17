@@ -1,0 +1,1 @@
+-define(DRIP_TABLE, drip_tab).
