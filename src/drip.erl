@@ -1,6 +1,7 @@
 -module(drip).
 
 -include("drip.hrl").
+-include("drip_internal.hrl").
 
 -export([
     add_rule/2,
@@ -9,19 +10,23 @@
     sample/1
 ]).
 
--type key() :: atom().
--type sampling_rule() ::
-    {static, 1..4294967295}.
+-type rand_range() :: 1..4294967295.
+-type rand_fun() :: fun((drip:rand_range()) -> drip:rand_range()).
 
--type ruleset() :: #{key() => sampling_rule()}.
+-type key() :: atom().
+-type rule() :: #static{} | #time_based{}.
+
+-type ruleset() :: #{key() => rule()}.
 
 -export_type([
     key/0,
-    sampling_rule/0,
+    rule/0,
+    rand_fun/0,
+    rand_range/0,
     ruleset/0
 ]).
 
--spec add_rule(key(), sampling_rule()) -> ok.
+-spec add_rule(key(), rule()) -> ok.
 add_rule(Key, Rule) ->
     drip_server:add_rule(Key, Rule).
 
@@ -54,9 +59,19 @@ sample(Key) ->
 
 % private
 
--spec apply_rule(key(), sampling_rule()) -> boolean().
-apply_rule(_Key, {static, Rate}) when Rate >= 1 andalso Rate =< 4294967295 ->
-    case granderl:uniform(Rate) of
-        1 -> true;
-        _ -> false
-    end.
+-spec apply_rule(key(), rule()) -> boolean().
+apply_rule(_Key, #static{rate = Rate, rng = Rng}) ->
+    rng(Rng, Rate);
+apply_rule(Key, #time_based{
+    sample_rate = Rate,
+    rng = Rng
+}) ->
+    EtsKey = {count, Key},
+    _Count = ets:update_counter(?DRIP_TABLE, EtsKey, {2, 1}, {EtsKey, 0}),
+    rng(Rng, Rate).
+
+-spec rng(undefined | rand_fun(), rand_range()) -> boolean().
+rng(undefined, Rate) ->
+    granderl:uniform(Rate) =:= 1;
+rng(F, Rate) when is_function(F, 1) ->
+    F(Rate) =:= 1.
