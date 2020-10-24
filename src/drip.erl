@@ -7,6 +7,7 @@
     add_rule/2,
     all/1,
     any/1,
+    rate/1,
     sample/1
 ]).
 
@@ -46,6 +47,14 @@ any([Key | Rest]) ->
     case sample(Key) of
         true -> true;
         false -> any(Rest)
+    end.
+
+-spec rate(key()) -> rand_range() | undefined.
+rate(Key) ->
+    case ets:lookup(?DRIP_TABLE, {rule, Key}) of
+        [{_, #time_based{sample_rate = R}}] -> R;
+        [{_, #static{rate = R}}] -> R;
+        _ -> undefined
     end.
 
 -spec sample(key()) -> boolean().
