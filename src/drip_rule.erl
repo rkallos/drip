@@ -28,6 +28,5 @@ time_based(Desired, Options) ->
         desired_per_second = Desired,
         sample_rate = proplists:get_value(sample_rate, Options, 1),
         rng = proplists:get_value(rng, Options, undefined),
-        minimum = proplists:get_value(minimum, Options, 0),
         ms_period = proplists:get_value(ms_period, Options, 15000)
     }.
