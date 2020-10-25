@@ -18,6 +18,12 @@
     terminate/2
 ]).
 
+-ifdef(TEST).
+-export([
+    calculate_new_sample_rates/2
+]).
+-endif.
+
 -define(SERVER, ?MODULE).
 
 -record(state, {
@@ -101,6 +107,11 @@ maybe_start_timer(Key, #time_based{
 }) ->
     _ = erlang:start_timer(Period, self(), {Key, erlang:system_time(second)}),
     ok;
+maybe_start_timer(Key, #average{
+    ms_period = Period
+}) ->
+    _ = erlang:start_timer(Period, self(), {Key, erlang:system_time(second)}),
+    ok;
 maybe_start_timer(_Key, _Rule) ->
     ok.
 
@@ -118,12 +129,22 @@ update_sample_rate(
             [] -> 0;
             [{_, N}] -> N
         end,
-    PeriodSecs = lists:max([Now - PrevTime, 1]),
+    PeriodSecs = erlang:max(Now - PrevTime, 1),
     SamplesPerSecond = NumSamples / PeriodSecs,
     NewSampleRate = round(SamplesPerSecond / DesiredPerSecond),
     Rule#time_based{
         sample_rate = check_rate(NewSampleRate)
-    }.
+    };
+update_sample_rate(
+    Key,
+    Rule = #average{
+        desired_per_second = Desired
+    },
+    _PrevTime
+) ->
+    Samples = collect_keyed_samples(Key),
+    NewSampleRates = calculate_new_sample_rates(Samples, Desired),
+    Rule#average{sample_rates = NewSampleRates}.
 
 % makes gradualizer happy
 -spec check_rate(integer()) -> drip:rand_range().
@@ -133,3 +154,49 @@ check_rate(Rate) when Rate > 4294967295 ->
     4294967295;
 check_rate(Rate) when Rate < 1 ->
     1.
+
+-spec collect_keyed_samples(drip:key()) -> [{atom(), non_neg_integer()}].
+collect_keyed_samples(RuleKey) ->
+    MatchSpec = [{{{count, {RuleKey, '$2'}}, '_'}, [], [{{RuleKey, '$2'}}]}],
+    Keys = lists:sort(ets:select(?DRIP_TABLE, MatchSpec)),
+    Taken = [ets:take(?DRIP_TABLE, {count, Key}) || Key <- Keys],
+    [{InnerKey, NumSamples} || [{{count, {_, InnerKey}}, NumSamples}] <- Taken].
+
+-spec calculate_new_sample_rates([{atom(), non_neg_integer()}], pos_integer()) ->
+    #{atom() => drip:rand_range()}.
+calculate_new_sample_rates(Samples, Desired) ->
+    {Sum, LogSum} = lists:foldl(
+        fun({_, N}, {S, L}) ->
+            {S + N, L + math:log10(N)}
+        end,
+        {0, 0},
+        Samples
+    ),
+    % number of times goal was met
+    GoalCount = Sum / Desired,
+    GoalRatio = GoalCount / LogSum,
+    {Res, _, _} = lists:foldl(
+        fun({Key, N}, {Map, Extra, KeysRemaining}) ->
+            ExtraForKey = Extra / KeysRemaining,
+            GoalForKey = erlang:max(1, math:log10(N) * GoalRatio) + ExtraForKey,
+            Extra2 = Extra - ExtraForKey,
+            {Rate, Extra3} =
+                case N of
+                    X when X < GoalForKey ->
+                        {1, Extra2 + GoalForKey - N};
+                    _ ->
+                        R =
+                            try
+                                trunc(math:ceil(N / GoalForKey))
+                            catch
+                                _ -> 1
+                            end,
+                        E = Extra2 + GoalForKey - (N / R),
+                        {R, E}
+                end,
+            {Map#{Key => Rate}, Extra3, KeysRemaining - 1}
+        end,
+        {#{}, 0, length(Samples)},
+        Samples
+    ),
+    Res.

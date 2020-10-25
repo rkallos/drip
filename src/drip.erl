@@ -14,8 +14,8 @@
 -type rand_range() :: 1..4294967295.
 -type rand_fun() :: fun((drip:rand_range()) -> drip:rand_range()).
 
--type key() :: atom().
--type rule() :: #static{} | #time_based{}.
+-type key() :: atom() | {atom(), term()}.
+-type rule() :: #static{} | #time_based{} | #average{}.
 
 -type ruleset() :: #{key() => rule()}.
 
@@ -50,6 +50,11 @@ any([Key | Rest]) ->
     end.
 
 -spec rate(key()) -> rand_range() | undefined.
+rate({RuleKey, InnerKey}) ->
+    case ets:lookup(?DRIP_TABLE, {rule, RuleKey}) of
+        [{_, #average{sample_rates = #{InnerKey := R}}}] -> R;
+        _ -> undefined
+    end;
 rate(Key) ->
     case ets:lookup(?DRIP_TABLE, {rule, Key}) of
         [{_, #time_based{sample_rate = R}}] -> R;
@@ -58,6 +63,13 @@ rate(Key) ->
     end.
 
 -spec sample(key()) -> boolean().
+sample({RuleKey, InnerKey}) ->
+    case ets:lookup(?DRIP_TABLE, {rule, RuleKey}) of
+        [{_, Rule}] ->
+            apply_rule({RuleKey, InnerKey}, Rule);
+        [] ->
+            false
+    end;
 sample(Key) ->
     case ets:lookup(?DRIP_TABLE, {rule, Key}) of
         [{_, Rule}] ->
@@ -77,6 +89,18 @@ apply_rule(Key, #time_based{
 }) ->
     EtsKey = {count, Key},
     _Count = ets:update_counter(?DRIP_TABLE, EtsKey, {2, 1}, {EtsKey, 0}),
+    rng(Rng, Rate);
+apply_rule(Key = {_RuleKey, InnerKey}, #average{
+    sample_rates = Rates,
+    rng = Rng
+}) ->
+    EtsKey = {count, Key},
+    _Count = ets:update_counter(?DRIP_TABLE, EtsKey, {2, 1}, {EtsKey, 0}),
+    Rate =
+        case Rates of
+            #{InnerKey := R} -> R;
+            _ -> 1
+        end,
     rng(Rng, Rate).
 
 -spec rng(undefined | rand_fun(), rand_range()) -> boolean().
