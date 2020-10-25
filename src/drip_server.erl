@@ -65,13 +65,7 @@ handle_info({timeout, _TRef, {Key, PrevTime}}, State = #state{rules = Rules}) ->
     logger:warning("Period timeout for ~p.", [Key]),
     case Rules of
         #{Key := Rule} ->
-            Now = erlang:system_time(second),
-            NumSamples =
-                case ets:take(?DRIP_TABLE, {count, Key}) of
-                    [] -> 0;
-                    [{_, N}] -> N
-                end,
-            Rule2 = update_sample_rate(Rule, Now - PrevTime, NumSamples),
+            Rule2 = update_sample_rate(Key, Rule, PrevTime),
             add_rule_to_table(Key, Rule2),
             maybe_start_timer(Key, Rule2)
     end,
@@ -110,15 +104,21 @@ maybe_start_timer(Key, #time_based{
 maybe_start_timer(_Key, _Rule) ->
     ok.
 
--spec update_sample_rate(drip:rule(), integer(), pos_integer()) -> drip:rule().
+-spec update_sample_rate(drip:key(), drip:rule(), integer()) -> drip:rule().
 update_sample_rate(
+    Key,
     Rule = #time_based{
         desired_per_second = DesiredPerSecond
     },
-    PeriodSecs0,
-    NumSamples
+    PrevTime
 ) ->
-    PeriodSecs = lists:max([PeriodSecs0, 1]),
+    Now = erlang:system_time(second),
+    NumSamples =
+        case ets:take(?DRIP_TABLE, {count, Key}) of
+            [] -> 0;
+            [{_, N}] -> N
+        end,
+    PeriodSecs = lists:max([Now - PrevTime, 1]),
     SamplesPerSecond = NumSamples / PeriodSecs,
     NewSampleRate = round(SamplesPerSecond / DesiredPerSecond),
     Rule#time_based{
