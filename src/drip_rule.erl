@@ -12,7 +12,7 @@
 -export([
     static/2
 ]).
--endif().
+-endif.
 
 static(Rate) ->
     #static{rate = Rate}.

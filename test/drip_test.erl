@@ -9,9 +9,9 @@ drip_test_() ->
         ]}.
 
 static_rules() ->
-    drip:add_rule(foo, {static, 1}),
-    drip:add_rule(bar, {static, 1}),
-    drip:add_rule(baz, {static, 4294967295}),
+    drip:add_rule(foo, drip_rule:static(1)),
+    drip:add_rule(bar, drip_rule:static(1)),
+    drip:add_rule(baz, drip_rule:static(4294967295)),
     ?assertEqual(drip:sample(foo), true),
     ?assertEqual(drip:sample(bar), true),
     ?assertEqual(drip:sample(baz), false),
