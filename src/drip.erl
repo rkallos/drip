@@ -87,15 +87,13 @@ apply_rule(Key, #time_based{
     sample_rate = Rate,
     rng = Rng
 }) ->
-    EtsKey = {count, Key},
-    _Count = ets:update_counter(?DRIP_TABLE, EtsKey, {2, 1}, {EtsKey, 0}),
+    bump_counter({count, Key}),
     rng(Rng, Rate);
 apply_rule(Key = {_RuleKey, InnerKey}, #average{
     sample_rates = Rates,
     rng = Rng
 }) ->
-    EtsKey = {count, Key},
-    _Count = ets:update_counter(?DRIP_TABLE, EtsKey, {2, 1}, {EtsKey, 0}),
+    bump_counter({count, Key}),
     Rate =
         case Rates of
             #{InnerKey := R} -> R;
@@ -108,3 +106,6 @@ rng(undefined, Rate) ->
     granderl:uniform(Rate) =:= 1;
 rng(F, Rate) when is_function(F, 1) ->
     F(Rate) =:= 1.
+
+bump_counter(Key) ->
+    ets:update_counter(?DRIP_TABLE, Key, {2, 1}, {Key, 0}).

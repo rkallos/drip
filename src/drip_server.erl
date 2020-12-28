@@ -29,6 +29,7 @@
 -record(state, {
     rules = #{} :: drip:ruleset()
 }).
+-type state() :: #state{}.
 
 -spec add_rule(drip:key(), drip:rule()) -> ok.
 add_rule(Key, Rule) ->
@@ -42,7 +43,7 @@ add_rule(Key, Rule) ->
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
--spec init(Args :: term()) -> {ok, #state{}}.
+-spec init(Args :: term()) -> {ok, state()}.
 init([]) ->
     Rules =
         case application:get_env(rules) of
@@ -52,8 +53,8 @@ init([]) ->
     add_rules_to_table(Rules),
     {ok, #state{rules = Rules}}.
 
--spec handle_call(Request :: term(), From :: {pid(), term()}, State :: term()) ->
-    {reply, ok, #state{}}.
+-spec handle_call(Request :: term(), From :: {pid(), term()}, State :: state()) ->
+    {reply, ok, state()}.
 handle_call({add_rule, Key, Rule}, _From, State = #state{rules = Rules}) ->
     add_rule_to_table(Key, Rule),
     maybe_start_timer(Key, Rule),
@@ -62,11 +63,11 @@ handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
 
--spec handle_cast(Request :: term(), State :: term()) -> {noreply, #state{}}.
+-spec handle_cast(Request :: term(), State :: state()) -> {noreply, state()}.
 handle_cast(_Request, State) ->
     {noreply, State}.
 
--spec handle_info(Info :: timeout() | term(), State :: term()) -> {noreply, #state{}}.
+-spec handle_info(Info :: timeout() | term(), State :: state()) -> {noreply, state()}.
 handle_info({timeout, _TRef, {Key, PrevTime}}, State = #state{rules = Rules}) ->
     logger:warning("Period timeout for ~p.", [Key]),
     case Rules of
@@ -189,7 +190,7 @@ calculate_new_sample_rates(Samples, Desired) ->
                             try
                                 trunc(math:ceil(N / GoalForKey))
                             catch
-                                _ -> 1
+                                error:badarith -> 1
                             end,
                         E = Extra2 + GoalForKey - (N / R),
                         {R, E}
