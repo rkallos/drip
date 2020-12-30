@@ -77,9 +77,13 @@ calculate_new_sample_rates() ->
     ?assertEqual(3, drip:rate({foo, b})),
     ?assertEqual(2, drip:rate({foo, c})),
 
-    [[drip:sample({foo, K}) || _ <- lists:seq(1, N)] || {K, N} <- Samples],
-    drip_server ! {timeout, blah, {foo, erlang:system_time(second) - 15}},
-    ok.
+    Samples2 = [{a, 1}, {b, 1}, {c, 1}],
+    [[drip:sample({foo, K}) || _ <- lists:seq(1, N)] || {K, N} <- Samples2],
+    drip_server ! {timeout, blah, {foo, erlang:system_time(second) - 10}},
+    timer:sleep(100),
+    ?assertEqual(1, drip:rate({foo, a})),
+    ?assertEqual(1, drip:rate({foo, b})),
+    ?assertEqual(1, drip:rate({foo, c})).
 
 % Bunch of random stuff to boost coverage %
 start_stop_and_other_test() ->

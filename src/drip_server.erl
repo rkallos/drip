@@ -180,7 +180,7 @@ calculate_new_sample_rates(Samples, Desired) ->
     ),
     % number of times goal was met
     GoalCount = Sum / Desired,
-    GoalRatio = GoalCount / LogSum,
+    GoalRatio = GoalCount / erlang:max(1, LogSum),
     {Res, _, _} = lists:foldl(
         fun({Key, N}, {Map, Extra, KeysRemaining}) ->
             ExtraForKey = Extra / KeysRemaining,
