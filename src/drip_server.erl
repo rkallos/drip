@@ -29,6 +29,7 @@
 -record(state, {
     rules = #{} :: drip:ruleset()
 }).
+
 -type state() :: #state{}.
 
 -spec add_rule(drip:key(), drip:rule()) -> ok.
@@ -70,13 +71,17 @@ handle_cast(_Request, State) ->
 -spec handle_info(Info :: timeout() | term(), State :: state()) -> {noreply, state()}.
 handle_info({timeout, _TRef, {Key, PrevTime}}, State = #state{rules = Rules}) ->
     logger:warning("Period timeout for ~p.", [Key]),
-    case Rules of
-        #{Key := Rule} ->
-            Rule2 = update_sample_rate(Key, Rule, PrevTime),
-            add_rule_to_table(Key, Rule2),
-            maybe_start_timer(Key, Rule2)
-    end,
-    {noreply, State};
+    State2 =
+        case Rules of
+            #{Key := Rule} ->
+                Rule2 = update_sample_rate(Key, Rule, PrevTime),
+                add_rule_to_table(Key, Rule2),
+                maybe_start_timer(Key, Rule2),
+                State#state{rules = Rules#{Key => Rule2}};
+            _ ->
+                State
+        end,
+    {noreply, State2};
 handle_info(_Info, State) ->
     {noreply, State}.
 
