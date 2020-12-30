@@ -39,13 +39,28 @@ static_rules() ->
     ?assertEqual(false, drip:all([foo, bar, baz])).
 
 time_based_rules() ->
-    drip:add_rule(foo, drip_rule:time_based(10)),
+    drip:add_rule(foo, drip_rule:time_based(1)),
     Options = [{sample_rate, 2}, {rng, fun(_) -> 1 end}, {ms_period, 10000}],
     drip:add_rule(bar, drip_rule:time_based(5, Options)),
     ?assertEqual(true, drip:sample(foo)),
     ?assertEqual(true, drip:sample(bar)),
     ?assertEqual(1, drip:rate(foo)),
-    ?assertEqual(2, drip:rate(bar)).
+    ?assertEqual(2, drip:rate(bar)),
+
+    drip:add_rule(baz, drip_rule:time_based(1)),
+    ets:insert(?DRIP_TABLE, {{count, baz}, 4294967296}),
+    drip:add_rule(bob, drip_rule:time_based(1)),
+    Samples = [{foo, 99}, {bar, 249}],
+    [[drip:sample(K) || _ <- lists:seq(1, N)] || {K, N} <- Samples],
+    drip_server ! {timeout, blah, {foo, erlang:system_time(second) - 10}},
+    drip_server ! {timeout, blah, {bar, erlang:system_time(second) - 10}},
+    drip_server ! {timeout, blah, {baz, erlang:system_time(second)}},
+    drip_server ! {timeout, blah, {bob, erlang:system_time(second)}},
+    timer:sleep(100),
+    ?assertEqual(10, drip:rate(foo)),
+    ?assertEqual(5, drip:rate(bar)),
+    ?assertEqual(4294967295, drip:rate(baz)),
+    ?assertEqual(1, drip:rate(bob)).
 
 calculate_new_sample_rates() ->
     Desired = 10,
