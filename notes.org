@@ -1,0 +1,203 @@
+* Design
+- Use granderl for speedy PRNG
+  - Does granderl accept lists?
+- type key() :: atom() | {atom(), term()}
+- drip:sample(key()) -> boolean()
+- drip:any([key()]) -> boolean()
+  - These should increment event counts for all events in the list
+- drip:all([key()]) -> boolean()
+- drip:add_rule(key, sampling_rule()) -> ok
+- Config as Erlang terms
+  - Mapping of keys (atoms()) to sampling rules
+  - foo => {static, N},
+  - bar => {n_events_every_sec, N}
+  - baz => {n_events_every_hms, {H, M, S}}
+  - bla => {keyed, sampling_rule()}
+  - bli => {or, [sampling_rule()]}
+  - blo => {and, [sampling_rule()]}
+- Storage
+  - ETS? persistent_term?
+- Processes
+  - drip_app: starts drip_sup
+  - drip_sup: starts drip
+  - drip
+    - Reads config
+    - Starts/manages timers
+    - Manages mapping of indexes to keys in atomics; stores in ETS
+      - For keyed events, how should this be managed? ETS? Double atomics size
+        on overflow?
+    - When timers fire, resets counts for atomics, calculates new sample rates
+      for event types with {n_events_every_*, _}
+    - What if there is a high cardinality key for a keyed sample type? The
+      amount of work to do for recalculating sample rates scales with
+      cardinality, and never shrinks?
+      - Eviction policy for keys?
+- Performance goals: As close to calling granderl:uniform() as possible for
+  callers
+** 17:28 More thoughts about drip
+- Keyed sampling is more complex; should be punted to later
+  - Preventing against high cardinality exploding drip's internal ETS tables
+  - Eviction policy for keys that don't have events within a time window
+- Taking sampling rule examples from https://github.com/honeycombio/dynsampler-go
+  - average sample rate
+  - average sample rate with minimum
+  - exponential moving average (ema)
+  - exponential moving average (ema) with minimum
+  - only once
+  - per-key throughput
+  - total throughput
+- Roadmap
+  - 0.1.0 :: Basics/MVP
+    - Reading config map
+    - New sampling rules: static, n_events_every_*
+      - Rename to avg, avg_with_minimum, ema, ema_with_minimum?
+        - These suck. Maybe they could accept options?
+          - {time_based, #time_based_options{}}
+            - -record(time_based_options, {
+                method = avg :: {ema, float()} | avg,
+                minimum = 0 :: non_neg_integer(),
+                ms_period = 5000 :: pos_integer()
+              }.
+            - option() :: {method, ema | avg} | {minimum, non_neg_integer()} |
+              {ms_period, pos_integer()} | {update_sample_rate_on_overflow,
+              boolean()}
+              - defaults: [{method, ema}, {minimum, 0}, {ms_period, 5000},
+                {update_sample_rate_on_overflow, true}]
+              - [ ] Expose proplists to users, use records internally
+        - drip_rule:Method(Options) for checking for valid options and
+          constructing the right data format
+    - [X] rebar3 plugin setup: erlfmt, gradualizer
+    - [X] Process setup
+    - [X] drip:sample/1, any/1, all/1
+      - Remove sample/1; use rate/1 instead. Don't mention RNGs anywhere;
+        leave it to the caller
+        - crap; any/1 and all/1 are no longer convenient, unless they accept a
+          RNG function
+    - [X] drip:rate/1
+      - Returns sample rate for key
+    - Plan for testing. Tricky, because:
+      - RNG
+        - Can allow for custom RNGs for tests, e.g.
+          cycling over lists:seq(1,X)
+          (how do I do stateful RNG in tests? process dictionary?),
+        - Add RNG to sampling rule?
+          - That seems to be the right place for it...
+      - time-based
+        - Can use tick messages to drip_server for time, instead of checking
+          time manually (!!!)
+        - Normal usage sets a timer with erlang:send_after
+        - Test usage can avoid this (how?), and do:
+          drip_server ! {tick, TimestampOfLastUpdate}
+          - If this is done before the regular tick, it should be fine
+          - It is more fine if handle_info({tick, ...}, ...) cancels the timer
+            - It's idempotent anyway, if you don't match on the result
+              (integer() | false)
+    - Configurable choice of RNG
+      - Could be compiled to the module in the future?
+      - Applying a fun is ~3x slower than a local function, an exported function
+        is ~6x as expensive as local;
+      - A fun is most configurable, but is it fast enough?
+      - A fun would also make testing easier; no need to mock
+  - 0.2.0 :: More sampling rules
+    - New sampling rules: or, and
+    - Benchmarks measuring the overhead of drip over granderl and rand
+  - 0.3.0 :: Support for exponential moving average in time_based sampling rules
+  - 1.0.0 :: Sampling by key
+    - New sampling rule: keyed
+    - Depending on 0.2.0 benchmarks, various optimizations:
+      - Compiling configuration to a module
+- Questions:
+  - dynsampler-go uses a goroutine for each sampler, which wakes up according to
+    a ticker channel. Should drip have a similar behavior where one process is
+    spawned for every new sampling rule?
+** <2020-10-20 Tue 00:21>
+- What to do during bootstrap? It's unacceptable to use a sample rate of 1 in
+  production; that would be spammy and amenable to cascading failures.
+  - I can't pick any number without knowing about the underlying distribution
+    first...
+  - If I set it to 0/RAND_MAX, we get no events until drip_server does its thing
+    for the first time
+  - Is this what EMA aims to solve?
+- Solution: Add option for initial sampling rate, with default = 1, and provide
+  documentation to users that, if they anticipate a high volume of events with a
+  certain key, to set it to some high value
+  - Using RAND_MAX will mean it'll never occur until bootstrapping is finished
+  - Using 1 will log every event until the next time sampling rate is
+    recalculated
+  - Both of these might fuck with EMA updates, oh well?
+** <2020-10-25 Sun 10:34> Thinking about keyed rule type
+- Given a set of {count, {Key, N}} elements in ETS, how do I come up with
+  appropriate sample rates for each Key such that the number of passing events
+  for each Key is relatively equal?
+  - e.g If events with key Foo happen 1000 times/second and Bar only happens
+    twice per second, then Foo should have a sampling rate of 500, and Bar
+    should have a sampling rate of 1?
+- Alternative conception of the problem; I want a total of 10 events per
+  second. I want an equal distribution of these 10 events across all possible
+  keys. This is done by adjusting the sample rates for individual keys.
+  - How dynsampler-go does it:
+    - sumEvents = sum(count[i]) for i in keys
+    - goalCount = sumEvents / goalSampleRate
+    - logSum = sum(log_10(count[i])) for i in keys
+      - same as log_10(product(count[i]) for i in keys)
+    - goalRatio = goalCount / logSum
+      - determines what percentage of the total event space belongs to each key
+        - (???) I don't really understand how
+    - extra = 0
+    - keysRemaining = |keys|
+    - extra[key] = extra / keysRemaining
+    - keysRemaining -= 1
+    - goal[key] = max(1, log(count[key]) * goalRatio) + extra[key]
+    - extra -= extra[key]
+    - if count[key] < goal[key]
+      - goal[key] = 1
+      - extra += goal[key] - count[key]
+    - rate = max(1, int(count[key] / goal[key]))
+    - extra += goal[key] - (count[key] / rate)
+** <2020-10-25 Sun 11:02> Idea: Rewriting drip in Zig with a NIF
+- In case pure Erlang (+ granderl) isn't 'fast enough'
+- Separate thread to update sample rates
+- Hash table for keys for fast access
+** <2020-10-25 Sun 13:57> Worked example
+Desired rate: 10 events / sec
+3 keys: A (100/sec), B (10/sec), C (2/sec)
+
+*** Round 1
+sumEvents = 100 + 10 + 2 = 112
+goalCount = 112/10 = 11.2
+logSum = 2 + 1 + 0.3 = 3.3
+goalRatio = 112/3.3 = 3.4
+goalFor[A] = max(1,   2 * 3.4) = 6.8
+goalFor[B] = max(1,   1 * 3.4) = 3.4
+goalFor[C] = max(1, 0.3 * 3.4) = 1
+rate[A] = ceil(100 / 6.8) = 15
+rate[B] = ceil( 10 / 3.4) = 3
+rate[C] = ceil(  2 / 1.0) = 2
+
+*** Round 2
+sumEvents = (100 / 15) + (10 / 3) + (2 / 2) ~= 11 (cool!)
+* Tasks
+** DONE Implement updating sample rates by drip_server
+CLOSED: [2020-10-24 Sat 17:56]
+- Destructive read number of events seen
+  - ets:take, as long as ets:update_counter() is always called with a default
+- Measure time since last sampling
+- Calculate new sample rate
+- Update rule record
+** DONE Rename #time_based.desired_rate
+CLOSED: [2020-10-24 Sat 17:56]
+** DONE Implement drip:rate/1
+CLOSED: [2020-10-25 Sun 10:26]
+** DONE Test drip:rate/1 with time_based rules after sending many events
+CLOSED: [2020-10-25 Sun 10:26]
+** DONE Unit test for calculate_new_sample_rate
+CLOSED: [2020-10-25 Sun 14:56]
+** TODO Write tests for #time_based
+** TODO Parse rules passed in via application config
+** TODO Switch to monotonically increasing counters
+- Requires drip_server to keep a snapshot/water mark
+- Removes the race condition between reading and resetting the counters
+** TODO Add benchmarks for current implementation
+- Latency/throughput
+- Base it on shackle's benchmark suite?
+** TODO Switch to using one ETS table per scheduler thread
